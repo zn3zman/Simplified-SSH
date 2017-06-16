@@ -12,12 +12,40 @@ Regions[0]=""
 Instances[0]=""
 InstancesRegions[0]=""
 
+AWSCLITest () {
+#Check if the AWS CLI is installed, then prompt to install if it isn't
+if [[ ! "which aws" ]]; then 
+  read -p "It looks like the AWS CLI is not installed. Would you like to install it? (y/n)" InstallCLI
+  if [[ "$InstallCLI" == "y" ]]; then
+    sudo pip install awscli || sudo yum install aws-cli -y || sudo apt-get install awscli -y
+  fi
+  main
+fi
+#Check if the AWS CLI is the current version. If not prompt to upgrade
+CLICurrentVersion="$(curl -s https://raw.githubusercontent.com/aws/aws-cli/develop/CHANGELOG.rst | grep -E '[0-9]' -m 1)"
+CLIYourVersion="$(aws --version 2>&1 | awk -F "/" '{print $2}' | awk -F " " '{print $1}')"
+if [[ "$CLICurrentVersion" != "$CLIYourVersion" ]]; then 
+  echo "Your version of the AWS CLI may not be current. Latest version is $CLICurrentVersion and yours is $CLIYourVersion."
+  read -p "Would you like to upgrade it? (y/n)" UpgradeCLI
+  if [[ "$InstallCLI" == "y" ]]; then
+	sudo pip install --upgrade awscli || sudo yum update awscli -y || sudo apt-get upgrade awscli -y
+    main
+  fi
+fi
+#Check if AWS CLI has credentials to do a describe-instances. If not, prompt for them. 
+if [[ $(aws ec2 describe-instances --region us-west-2 2>&1 > /dev/null | grep "Unable to locate credentials.") ]]; then 
+  echo "No credentials set. Please enter your AWS credentials to continue. These will be saved locally to your computer by the AWS CLI."
+  aws configure
+  main
+fi
+}
+
 #Functions
 ListRegions () {
   #Unset and recreate Regions array to reset for a second loop through
   unset Regions; Regions[0]="";echo ""
   #Describe-regions, output to a file, and sort for readability
-  aws ec2 describe-regions --output text --query 'Regions[].{Name:RegionName}' > describe-regions
+  aws ec2 describe-regions --region us-east-1 --output text --query 'Regions[].{Name:RegionName}' > describe-regions
   sort describe-regions -o describe-regions
   #Set loop/array counter to 1 and print table headers
   counter=1
@@ -292,7 +320,7 @@ StartSSH () {
     echo -e "$iKeyName.pem doesn't exist in \"$HOME\". Searching your home directory for it..."
     #Search user's home directory for $iKeyName.pem, grepping out errors, then take the result and grab the path without the filename
     iKeyDir="$(dirname $(find ~ -name $iKeyName.pem 2>&1 | grep -vi "denied\|error"))"
-    if [[ -z "$iKeyDir" ]] ; then echo -e "Couldn't find $iKeyName.pem Exiting...\n"; main; fi
+    if [[ -z "$iKeyDir" ]] ; then echo -e "Couldn't find $iKeyName.pem. Please ensure the key pair for the instance is accessible inside your home directory and named \"$iKeyName.pem\".\n"; main; fi
   else
     iKeyDir="$HOME" 
     echo -e "Found $iKeyDir/$iKeyName.pem"
@@ -314,12 +342,12 @@ StartSSH () {
       iSSHUser="ec2-user";;
   esac
   echo -e -n "best guess is $iDistroTag\n"
-  read -p "What user would you like to SSH as? Leave blank (just press enter) to use the default \"$iSSHUser\": " iCustomSSHUser
+  read -p "What user would you like to SSH as? Leave blank (just press enter) to use the default \"${yellow}$iSSHUser${nocolor}\": " iCustomSSHUser
   if [[ ! -z "$iCustomSSHUser" ]]; then
     #echo -e "Using \"$iCustomSSHUser\" as the user instead of \"$iSSHUser\"."
     iSSHUser="$iCustomSSHUser"
   fi
-  echo -e "Connecting to $iID as \"$iSSHUser\" using private key \"$iKeyDir/$iKeyName.pem\""
+  echo -e "\nConnecting to $iID as \"$iSSHUser\" using private key \"$iKeyDir/$iKeyName.pem\""
   echo -e "Type ${yellow}exit${nocolor} to end the SSH session."
   echo -e "$ ssh -i \"$iKeyDir/$iKeyName.pem\" $iSSHUser@$iPublicIP -o \"ServerAliveInterval 30\""
   printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
@@ -332,7 +360,7 @@ StopInstance () {
   #Stop the instance after being used, if desired.
   while true ; do
     echo -e ""
-    read -p "Would you like to stop that instance, $iID? (y/n) " StopTheInstance
+    read -p "Would you like to stop that instance, $iID? (${green}y${nocolor}/${red}n${nocolor}) " StopTheInstance
     case $StopTheInstance in
     [yY])
       echo -e "$ aws ec2 stop-instances --instance-ids $iID --region $(GetiRegion)"
@@ -360,6 +388,8 @@ exit 0
 
 main () {
 while true; do
+  #Test if the AWS CLI is installed and configured
+  AWSCLITest
   #Get Region List
   ListRegions
   #Ask which region to select
@@ -378,3 +408,4 @@ done
 }
 
 main "$@"
+                                                                    
